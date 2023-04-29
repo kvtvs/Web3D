@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>My first three.js app</title>
+    <style>
+      body {
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <script
+      async
+      src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"
+    ></script>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three/examples/jsm/"
+        }
+      }
+    </script>
+
+    <script type="module">
+      import * as THREE from "three";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+      import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+      import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
+      import { VRButton } from "three/addons/webxr/VRButton.js";
+      import { XRControllerModelFactory } from "three/addons/webxr/XRControllerModelFactory.js";
+
+      //////////////
+      //Initialize variables
+      //////////////
+      let controller1, controller2;
+      let controllerGrip1, controllerGrip2;
+      let raycaster;
+      const intersected = [];
+      const tempMatrix = new THREE.Matrix4();
+      let group;
+      let group_squeeze;
+      let mixer;
+
+      // initialize marker for teleport and referencespace of headset
+      // initialize the INTERSECTION array for teleport
+      let marker, baseReferenceSpace;
+      let INTERSECTION;
+      const clock = new THREE.Clock();
+
+      //////////////
+      //Set up the scene
+      //////////////
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(
+        75,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        1000
+      );
+      const renderer = new THREE.WebGLRenderer();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setClearColor("rgb(52, 192, 235, 235)");
+      document.body.appendChild(renderer.domElement);
+      document.body.appendChild(VRButton.createButton(renderer));
+      renderer.xr.enabled = true;
+
+      renderer.toneMapping = THREE.LinearToneMapping;
+      renderer.outputEncoding = THREE.sRGBEncoding;
+
+      group = new THREE.Group();
+      scene.add(group);
+
+      group_squeeze = new THREE.Group();
+      scene.add(group_squeeze);
+
+      // const geometry = new THREE.BoxGeometry( 1, 1, 1 );
+      // const material = new THREE.MeshPhongMaterial( {
+      // 	color: 0x00ff00,
+      // 	wireframe: false
+      // } );
+      // const cube = new THREE.Mesh( geometry, material );
+      // scene.add( cube );
+
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 2);
+      scene.add(directionalLight);
+
+      // const loader = new GLTFLoader().setPath( 'models/' );
+      // 	loader.load( 'world.glb', function ( gltf ) {
+
+      // 	scene.add( gltf.scene );
+      // } );
+
+      new RGBELoader()
+        .setPath("hdr/")
+        .load("farm_field_puresky_1k.hdr", function (texture) {
+          texture.mapping = THREE.EquirectangularReflectionMapping;
+          scene.background = texture;
+          scene.environment = texture;
+          // model
+          const loader = new GLTFLoader().setPath("models/");
+          loader.load("surface_trees.glb", function (gltf) {
+            gltf.scene.position.y = -2;
+            gltf.scene.position.x = -5;
+            // scene.add( gltf.scene );
+            group.add(gltf.scene);
+          });
+        });
+      const loader2 = new GLTFLoader().setPath("models/");
+      loader2.load("surface_noraycast.glb", function (gltf) {
+        gltf.scene.position.y = -2;
+        gltf.scene.position.x = -5;
+        group_squeeze.add(gltf.scene);
+      });
+
+      const loader3 = new GLTFLoader().setPath("/models/");
+      loader3.load("Chest-test-baked.gltf", function (gltf) {
+        const modelObject = gltf.scene;
+
+        const model = gltf.scene.children[0];
+        const s = 0.5;
+        modelObject.rotation.y = THREE.MathUtils.degToRad(180);
+        modelObject.position.x = -10;
+        modelObject.position.y = -1;
+
+        scene.add(modelObject);
+
+        mixer = new THREE.AnimationMixer(modelObject);
+
+        console.log(mixer);
+
+        const clips = gltf.animations || [];
+
+        console.log(clips);
+
+        const clip = THREE.AnimationClip.findByName(clips, "Action");
+        console.log(clip);
+        const action = mixer.clipAction(clip);
+        action.play();
+
+        scene.add(gltf.scene);
+      });
+
+      // const barrel = new GLTFLoader().setPath( 'models/' );
+      // 	loader.load( 'barrel.gltf', function ( gltf ) {
+      // 	scene.add( gltf.scene );
+      // } );
+
+      const axesHelper = new THREE.AxesHelper(5);
+      scene.add(axesHelper);
+
+      marker = new THREE.Mesh(
+        new THREE.CircleGeometry(0.25, 32).rotateX(-Math.PI / 2),
+        new THREE.MeshBasicMaterial({ color: 0x808080 })
+      );
+      scene.add(marker);
+
+      initVR();
+
+      function initVR() {
+        document.body.appendChild(VRButton.createButton(renderer));
+        renderer.xr.enabled = true;
+
+        renderer.xr.addEventListener(
+          "sessionstart",
+          () => (baseReferenceSpace = renderer.xr.getReferenceSpace())
+        );
+
+        // controllers
+
+        controller1 = renderer.xr.getController(0);
+        controller1.addEventListener("selectstart", onSelectStart);
+        controller1.addEventListener("selectend", onSelectEnd);
+        controller1.addEventListener("squeezestart", onSqueezeStart);
+        controller1.addEventListener("squeezeend", onSqueezeEnd);
+        scene.add(controller1);
+
+        controller2 = renderer.xr.getController(1);
+        controller2.addEventListener("selectstart", onSelectStart);
+        controller2.addEventListener("selectend", onSelectEnd);
+        controller2.addEventListener("squeezestart", onSqueezeStart);
+        controller2.addEventListener("squeezeend", onSqueezeEnd);
+        scene.add(controller2);
+
+        const controllerModelFactory = new XRControllerModelFactory();
+
+        controllerGrip1 = renderer.xr.getControllerGrip(0);
+        controllerGrip1.add(
+          controllerModelFactory.createControllerModel(controllerGrip1)
+        );
+        scene.add(controllerGrip1);
+
+        // controllerGrip2 = renderer.xr.getControllerGrip( 1 );
+        // controllerGrip2.add( controllerModelFactory.createControllerModel( controllerGrip2 ) );
+        // scene.add( controllerGrip2 );
+
+        const loader2 = new GLTFLoader().setPath("models/gundy/");
+        loader2.load("scene.gltf", function (gltf) {
+          gltf.scene.scale.set(0.0003, 0.0003, 0.0003);
+          let mymodel = gltf.scene;
+          mymodel.rotation.y = THREE.MathUtils.degToRad(180);
+          mymodel.position.set(0, -0.01, 0);
+          controller2.add(mymodel);
+        });
+
+        //
+
+        const geometry = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(0, 0, 0),
+          new THREE.Vector3(0, 0, -1),
+        ]);
+
+        const line = new THREE.Line(geometry);
+        line.name = "line";
+        line.scale.z = 5;
+
+        controller1.add(line.clone());
+        controller2.add(line.clone());
+
+        raycaster = new THREE.Raycaster();
+      }
+
+      function onSqueezeStart() {
+        this.userData.isSqueezing = true;
+        console.log("Controller squeeze started");
+      }
+
+      function onSqueezeEnd() {
+        this.userData.isSqueezing = false;
+        console.log("squeezeend");
+        if (INTERSECTION) {
+          const offsetPosition = {
+            x: -INTERSECTION.x,
+            y: -INTERSECTION.y,
+            z: -INTERSECTION.z,
+            w: 1,
+          };
+          const offsetRotation = new THREE.Quaternion();
+          const transform = new XRRigidTransform(
+            offsetPosition,
+            offsetRotation
+          );
+          const teleportSpaceOffset =
+            baseReferenceSpace.getOffsetReferenceSpace(transform);
+          renderer.xr.setReferenceSpace(teleportSpaceOffset);
+        }
+      }
+
+      function onSelectStart(event) {
+        const controller = event.target;
+
+        const intersections = getIntersections(controller);
+
+        if (intersections.length > 0) {
+          const intersection = intersections[0];
+
+          const object = intersection.object;
+          object.material.emissive.b = 1;
+          controller.attach(object);
+
+          controller.userData.selected = object;
+        }
+      }
+
+      function onSelectEnd(event) {
+        const controller = event.target;
+
+        if (controller.userData.selected !== undefined) {
+          const object = controller.userData.selected;
+          object.material.emissive.b = 0;
+          group.attach(object);
+
+          controller.userData.selected = undefined;
+        }
+      }
+
+      function getIntersections(controller) {
+        tempMatrix.identity().extractRotation(controller.matrixWorld);
+
+        raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+        raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+
+        return raycaster.intersectObjects(group.children, true);
+      }
+
+      function intersectObjects(controller) {
+        // Do not highlight when already selected
+
+        if (controller.userData.selected !== undefined) return;
+
+        const line = controller.getObjectByName("line");
+        const intersections = getIntersections(controller);
+
+        if (intersections.length > 0) {
+          const intersection = intersections[0];
+
+          const object = intersection.object;
+          object.material.emissive.r = 1;
+          intersected.push(object);
+
+          line.scale.z = intersection.distance;
+        } else {
+          line.scale.z = 5;
+        }
+      }
+
+      function cleanIntersected() {
+        while (intersected.length) {
+          const object = intersected.pop();
+          object.material.emissive.r = 0;
+        }
+      }
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+
+      controls.minDistance = 1;
+      controls.maxDistance = 50;
+
+      camera.position.z = 50;
+      camera.position.y = 2;
+      camera.position.x = 2;
+      controls.update();
+
+      camera.lookAt(axesHelper.position);
+
+      window.addEventListener("resize", onWindowResize);
+
+      function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      }
+
+      renderer.setAnimationLoop(function () {
+        cleanIntersected();
+        intersectObjects(controller1);
+        intersectObjects(controller2);
+        controls.update();
+        renderer.render(scene, camera);
+        moveMarker();
+
+        const delta = clock.getDelta();
+
+        if (typeof mixer !== "undefined") {
+          mixer.update(delta);
+        }
+
+        renderer.render(scene, camera);
+      });
+
+      function moveMarker() {
+        INTERSECTION = undefined;
+        if (controller1.userData.isSqueezing === true) {
+          tempMatrix.identity().extractRotation(controller1.matrixWorld);
+          raycaster.ray.origin.setFromMatrixPosition(controller1.matrixWorld);
+          raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+          //const intersects = raycaster.intersectObjects([floor]);
+          const intersects = raycaster.intersectObjects(
+            group_squeeze.children,
+            true
+          );
+          if (intersects.length > 0) {
+            INTERSECTION = intersects[0].point;
+            console.log(intersects[0]);
+            console.log(INTERSECTION);
+          }
+        } else if (controller2.userData.isSqueezing === true) {
+          tempMatrix.identity().extractRotation(controller2.matrixWorld);
+          raycaster.ray.origin.setFromMatrixPosition(controller2.matrixWorld);
+          raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+          // const intersects = raycaster.intersectObjects([floor]);
+          const intersects = raycaster.intersectObjects(
+            group_squeeze.children,
+            true
+          );
+          if (intersects.length > 0) {
+            INTERSECTION = intersects[0].point;
+          }
+        }
+        if (INTERSECTION) marker.position.copy(INTERSECTION);
+        marker.visible = INTERSECTION !== undefined;
+      }
+    </script>
+  </body>
+</html>
